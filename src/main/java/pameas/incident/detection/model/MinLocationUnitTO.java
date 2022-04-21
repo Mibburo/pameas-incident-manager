@@ -14,5 +14,6 @@ public class MinLocationUnitTO {
     private String xLocation;
     @JsonProperty("yLocation")
     private String yLocation;
+    @JsonProperty("timestamp")
     private String timestamp;
 }

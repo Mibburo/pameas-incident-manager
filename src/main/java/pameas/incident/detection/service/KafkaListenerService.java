@@ -1,27 +1,28 @@
-/*
 package pameas.incident.detection.service;
 
-import com.mashape.unirest.http.exceptions.UnirestException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.Consumer;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.*;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
-import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import pameas.incident.detection.facade.DbProxyFacade;
+import pameas.incident.detection.model.Location;
+import pameas.incident.detection.model.MinLocationTO;
+import pameas.incident.detection.model.PassengerIncident;
+import pameas.incident.detection.model.enums.IncidentType;
 import pameas.incident.detection.utils.EnvUtils;
 
 import java.time.Duration;
-import java.util.Collections;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Properties;
 
 import static pameas.incident.detection.utils.Constants.LOCATION_TOPIC;
+import static pameas.incident.detection.utils.Constants.NOTIFICATION_TOPIC;
 
 @Slf4j
 @Component
@@ -30,25 +31,91 @@ public class KafkaListenerService {
     private final Properties properties = new Properties();
 
     private DbProxyFacade dbProxyFacade;
+    private IncidentManagementService incidentManagementService;
 
     @Autowired
-    KafkaListenerService(DbProxyFacade dbProxyFacade){
+    KafkaListenerService(DbProxyFacade dbProxyFacade, IncidentManagementService incidentManagementService){
         this.dbProxyFacade = dbProxyFacade;
+        this.incidentManagementService = incidentManagementService;
     }
 
-@Value(value = "${listen.topic.name}")
-    private String topicName;
-
-
-//    @KafkaListener(topics = "pameas-location")
-//    void listener(String data) throws UnirestException {
-//        log.info("11111111111111111111111");
-//        log.info(data);
-//        if (data.equals("PASSENGER_ALERT_COMPLETED")) {
-//            dbProxyFacade.getGeofenceStatus();
-//        }
-//    }
     private Consumer<Long, String> createConsumer() {
+
+        generateProperties();
+        // Create the consumer using props.
+        final Consumer<Long, String> consumer =
+                new KafkaConsumer<>(this.properties);
+
+        // Subscribe to the topic.
+        //consumer.subscribe(Collections.singletonList(LOCATION_TOPIC));
+        consumer.subscribe(Arrays.asList(LOCATION_TOPIC, NOTIFICATION_TOPIC));
+        return consumer;
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void runConsumer() throws InterruptedException {
+        final Consumer<Long, String> consumer = createConsumer();
+        final int giveUp = 100;   int noRecordsCount = 0;
+
+        while (true) {
+            final ConsumerRecords<Long, String> consumerRecords =
+                    consumer.poll(Duration.ofMillis(1000));
+
+            if (consumerRecords.count()==0) {
+                noRecordsCount++;
+                if (noRecordsCount > giveUp) break;
+                else continue;
+            }
+            for (TopicPartition partition : consumerRecords.partitions()) {
+                List<ConsumerRecord<Long, String>> partitionRecords = consumerRecords.records(partition);
+                partitionRecords.forEach(record -> {
+                    record.topic();
+                    System.out.printf("Consumer Record:(%d, %s, %d, %d, %s)\n",
+                            record.key(), record.value(),
+                            record.partition(), record.offset(), record.topic());
+                    try {
+                        ObjectMapper mapper = new ObjectMapper();
+                        switch (record.topic()){
+                            case "pameas-location" :
+                                MinLocationTO locationTO = mapper.readValue(record.value(), MinLocationTO.class);
+                                Location location = generateLocation(locationTO);
+                                incidentManagementService.monitorPassengers(location);
+                                break;
+                            case "pameas-notification":
+                                PassengerIncident incident = mapper.readValue(record.value(), PassengerIncident.class);
+                                if(incident.getType().equals(IncidentType.PASSENGER_ALERT_COMPLETED.toString())){
+                                    incidentManagementService.managePassengerRoute();
+                                }
+                                if(incident.getType().equals(IncidentType.PASSENGER_INSTRUCTIONS_COMPLETED.toString())){
+                                    incidentManagementService.managePassengerEvent();
+                                }
+                                break;
+                        }
+
+                    } catch (Exception e) {
+                        log.error(e.getMessage());
+                    }
+                });
+            }
+
+            consumer.commitAsync();
+        }
+        consumer.close();
+        System.out.println("DONE");
+    }
+
+    private Location generateLocation(MinLocationTO locationTO){
+        Location location = new Location();
+        location.setXLocation(locationTO.getLocation().getXLocation());
+        location.setYLocation(locationTO.getLocation().getYLocation());
+        location.setHashedMacAddress(locationTO.getHashedMacAddress());
+        location.setTimestamp(locationTO.getLocation().getTimestamp());
+        location.setGeofenceId(locationTO.getGeofence().getGfId());
+
+        return location;
+    }
+
+    private void generateProperties(){
         String kafkaURI = EnvUtils.getEnvVar("KAFKA_URI_WITH_PORT","dfb.palaemon.itml.gr:30093");
 
 //                StringUtils.isEmpty(System.getenv("KAFKA_URI"))?"dfb.palaemon.itml.gr:30093":System.getenv("KAFKA_URI");
@@ -84,45 +151,9 @@ public class KafkaListenerService {
 
         this.properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         this.properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        this.properties.put(ConsumerConfig.GROUP_ID_CONFIG, "UAEG");
+        this.properties.put(ConsumerConfig.GROUP_ID_CONFIG, "uaeg-consumer-group");
 
-        // Create the consumer using props.
-        final Consumer<Long, String> consumer =
-                new KafkaConsumer<>(this.properties);
-
-        // Subscribe to the topic.
-        consumer.subscribe(Collections.singletonList(LOCATION_TOPIC));
-        return consumer;
-    }
-
-    @EventListener(ApplicationReadyEvent.class)
-    public void runConsumer() throws InterruptedException {
-        final Consumer<Long, String> consumer = createConsumer();
-        log.info("fffffffffffffffffffffffff");
-        final int giveUp = 100;   int noRecordsCount = 0;
-
-        while (true) {
-            final ConsumerRecords<Long, String> consumerRecords =
-                    consumer.poll(Duration.ofMillis(1000));
-
-            if (consumerRecords.count()==0) {
-                noRecordsCount++;
-                if (noRecordsCount > giveUp) break;
-                else continue;
-            }
-
-            consumerRecords.forEach(record -> {
-                System.out.printf("Consumer Record:(%d, %s, %d, %d)\n",
-                        record.key(), record.value(),
-                        record.partition(), record.offset());
-            });
-
-            consumer.commitAsync();
-        }
-        consumer.close();
-        System.out.println("DONE");
     }
 
 
 }
-*/

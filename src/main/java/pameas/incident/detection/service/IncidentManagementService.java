@@ -9,13 +9,13 @@ import pameas.incident.detection.facade.LocationDataFacade;
 import pameas.incident.detection.model.*;
 import pameas.incident.detection.model.entity.LocationMonitor;
 import pameas.incident.detection.model.enums.GfStatus;
+import pameas.incident.detection.model.enums.IncidentType;
 import pameas.incident.detection.repository.LocationMonitorRepository;
 import pameas.incident.detection.utils.DateUtil;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -60,22 +60,21 @@ public class IncidentManagementService {
             String pregnancyData = details.getGeneral_info().getPregnency_data();
 
             if(!"".equals(medicalConditions) || !"".equals(mobilityIssues) || !"".equals(pregnancyData)) {
-                PassengerIncident incident = generatePassengerIncident(details);
+                PassengerIncident incident = generatePassengerIncident(details, IncidentType.PASSENGER_EMERGENCY.toString());
 
-                //dbProxyFacade.declarePassengerIncident(incident);
-
-                //TODO publish to kafka
+                kafkaService.saveIncident(incident);
             }
         }
     }
 
     public void monitorPassengers(Location location) throws UnirestException {
-        //List<LocationServiceDTO> passengerLocationList = new ArrayList<>();
         LocationServiceDTO passengerLocation = new LocationServiceDTO();
 
         passengerLocation.setTimestamp(location.getTimestamp());
         passengerLocation.setYCoord(location.getYLocation());
         passengerLocation.setXCoord(location.getXLocation());
+
+        if(location.getHashedMacAddress() == null) return;
 
         LocationMonitor locationMonitor = locationMonitorRepo.findByHashedMacAddress(location.getHashedMacAddress());
         if(locationMonitor == null) {
@@ -86,8 +85,6 @@ public class IncidentManagementService {
         }
 
         List<Location> passengerLocationList = locationMonitor.getLocations();
-
-
         passengerLocationList.add(location);
         locationMonitor.setLocations(passengerLocationList);
 
@@ -98,25 +95,24 @@ public class IncidentManagementService {
         LocalDateTime latestTime = DateUtil.dateStringToLDT(latestLocation.getTimestamp());
 
         Set<String> gfFilter = passengerLocationList.stream().map(e -> e.getGeofenceId()).collect(Collectors.toSet());
-
         if(latestTime.minusMinutes(5).isAfter(startTime) && !locationMonitor.getHasIncident() && gfFilter.size() == 1) {
             List<MusteringDetails> detailsList = dbProxyFacade.getPassengerMusteringDetails();
             Optional<MusteringDetails> details = detailsList.stream()
                     .filter(e -> e.getCommunication_details().getMacAddress()
                             .equals(location.getHashedMacAddress())).findFirst();
             if(details.isPresent()) {
-                PassengerIncident incident = generatePassengerIncident(details.get());
+                PassengerIncident incident = generatePassengerIncident(details.get(), IncidentType.PASSENGER_EMERGENCY.toString());
                 locationMonitor.setHasIncident(true);
 
-                //TODO send to kafka
+                kafkaService.saveIncident(incident);
             }
         }
 
-
+        //save passenger location to redis
         locationMonitorRepo.save(locationMonitor);
     }
 
-    private PassengerIncident generatePassengerIncident(MusteringDetails details) {
+    private PassengerIncident generatePassengerIncident(MusteringDetails details, String incidentType) {
         PassengerIncident incident = new PassengerIncident();
         incident.setId(details.getGeneral_info().getIdentifier());
         incident.setPassengerName(details.getGeneral_info().getName());
@@ -134,6 +130,7 @@ public class IncidentManagementService {
         incident.setStatus(""); //TODO find status
         incident.setX_loc(details.getLast_known_location().getLocation().getXLocation());
         incident.setY_loc(details.getLast_known_location().getLocation().getYLocation());
+        incident.setType(incidentType);
         return incident;
     }
 
@@ -197,8 +194,10 @@ public class IncidentManagementService {
                     dbProxyFacade.updateGeofence(gfDto);
                 }
             }
-
-            //TODO call GEOFENCE_BLOCK_REROUTE_NEEDED in kafka
+            PassengerIncident incident = new PassengerIncident();
+            incident.setType(IncidentType.GEOFENCE_BLOCK_REROUTE_NEEDED.toString());
+            incident.setTimestamp(DateUtil.dateToString(LocalDateTime.now()));
+            kafkaService.saveIncident(incident);
         }
     }
 
