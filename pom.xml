@@ -10,7 +10,7 @@
 	</parent>
 	<groupId>pameas</groupId>
 	<artifactId>incident.detection</artifactId>
-	<version>0.0.1-SNAPSHOT</version>
+	<version>1.0.0</version>
 	<name>incident.detection</name>
 	<description>Incident detection module for pameas</description>
 	<properties>
@@ -70,6 +70,12 @@
 			<groupId>com.mashape.unirest</groupId>
 			<artifactId>unirest-java</artifactId>
 			<version>1.4.9</version>
+		</dependency>
+		<!-- swagger -->
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-ui</artifactId>
+			<version>1.6.4</version>
 		</dependency>
 	</dependencies>
 

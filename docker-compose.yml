@@ -1,0 +1,22 @@
+version: '2'
+services:
+  palaemon-incident-detection:
+    image:  mibburo/palaemon-incident-detection:palaemon-incident-detection
+    environment:
+      - DFB_URI=dfb.palaemon.itml.gr
+      - DFB_PORT=443
+      - KAFKA_URI_WITH_PORT=dfb.palaemon.itml.gr:30093
+      - KAFKA_TRUST_STORE_LOCATION=/store/truststore.jks
+      - KAFKA_TRUST_STORE_PASSWORD=teststore
+      - KAFKA_KEYSTORE_LOCATION=/store/keystore.jks
+      - KAFKA_KEY_STORE_PASSWORD=teststore
+      - SSL_KEYSTORE_PASS=testpass
+      - SSL_ROOT_CERTIFICATE=/store/dfb.palaemon.itml.crt
+      - PUBLIC_ENCRYPTION_KEY_PATH=/store/public.key
+      - PRIVATE_ENCRYPTION_KEY_PATH=/store/private.key
+    volumes:
+      - /home/user/wsmsg/certs/:/store
+    expose:
+      - 7040
+    ports:
+      - 7040:7040
